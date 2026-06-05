@@ -155,17 +155,40 @@ export default function PatientHealthTracker() {
   }
 
   // Camera Management
-  const startCamera = async () => {
+  const startCamera = async (moduleType) => {
     setHasCameraAccess(false)
+    const isPpg = ['heart', 'bp', 'spo2'].includes(moduleType)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' }
+        video: { facingMode: isPpg ? 'environment' : 'user' }
       })
       streamRef.current = stream
       setHasCameraAccess(true)
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         videoRef.current.play()
+      }
+
+      // Auto enable flash/torch for PPG modules if supported
+      if (isPpg) {
+        const track = stream.getVideoTracks()[0]
+        if (track) {
+          try {
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {}
+            if (capabilities.torch) {
+              await track.applyConstraints({
+                advanced: [{ torch: true }]
+              })
+            } else {
+              // Try applying it anyway as fallback
+              await track.applyConstraints({
+                advanced: [{ torch: true }]
+              })
+            }
+          } catch (torchErr) {
+            console.warn('Torch activation failed or not supported:', torchErr)
+          }
+        }
       }
     } catch (err) {
       console.warn('Camera blocked or unavailable, using image simulation:', err)
@@ -269,7 +292,20 @@ export default function PatientHealthTracker() {
 
     // Request camera sensor if appropriate
     if (['heart', 'bp', 'spo2', 'respiratory', 'face'].includes(moduleType)) {
-      await startCamera()
+      await startCamera(moduleType)
+      
+      if (['heart', 'bp', 'spo2'].includes(moduleType)) {
+        toast('💡 Flash turned on. Place your finger firmly over the back camera lens and flash!', {
+          duration: 6000,
+          position: 'top-center',
+          style: {
+            background: '#0f172a',
+            color: '#f43f5e',
+            fontWeight: 'bold',
+            border: '2px solid rgba(244,63,94,0.4)'
+          }
+        })
+      }
     }
 
     setTimeout(() => {
@@ -704,11 +740,28 @@ export default function PatientHealthTracker() {
           </div>
 
           {activeModule === 'heart' ? (
-            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden">
-              <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden min-h-[140px]">
+              {hasCameraAccess ? (
+                <video
+                  ref={(el) => {
+                    if (el && streamRef.current) {
+                      el.srcObject = streamRef.current;
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+              )}
               <div className="absolute inset-0 bg-red-600/35 mix-blend-color-burn" />
-              <RefreshCw className="animate-spin text-rose-500" size={24} />
-              <span className="text-white text-xs font-bold animate-pulse">Scanning Pulse... {scanProgress}%</span>
+              <div className="z-10 flex flex-col items-center space-y-1.5 bg-slate-950/75 p-3 rounded-2xl border border-white/10 backdrop-blur-sm text-center">
+                <RefreshCw className="animate-spin text-rose-500" size={20} />
+                <span className="text-white text-xs font-bold animate-pulse">Scanning Pulse... {scanProgress}%</span>
+                <span className="text-rose-400 text-[9px] font-bold leading-tight">⚠️ Turn on mobile flash & place finger over camera & flash</span>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -758,11 +811,28 @@ export default function PatientHealthTracker() {
           </div>
 
           {activeModule === 'bp' ? (
-            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden">
-              <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden min-h-[140px]">
+              {hasCameraAccess ? (
+                <video
+                  ref={(el) => {
+                    if (el && streamRef.current) {
+                      el.srcObject = streamRef.current;
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+              )}
               <div className="absolute inset-0 bg-red-600/35 mix-blend-color-burn" />
-              <RefreshCw className="animate-spin text-amber-500" size={24} />
-              <span className="text-white text-xs font-bold animate-pulse">Analyzing Waves... {scanProgress}%</span>
+              <div className="z-10 flex flex-col items-center space-y-1.5 bg-slate-950/75 p-3 rounded-2xl border border-white/10 backdrop-blur-sm text-center">
+                <RefreshCw className="animate-spin text-amber-500" size={20} />
+                <span className="text-white text-xs font-bold animate-pulse">Analyzing Waves... {scanProgress}%</span>
+                <span className="text-amber-400 text-[9px] font-bold leading-tight">⚠️ Turn on mobile flash & place finger over camera & flash</span>
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -806,11 +876,28 @@ export default function PatientHealthTracker() {
           </div>
 
           {activeModule === 'spo2' ? (
-            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden">
-              <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+            <div className="py-6 flex flex-col items-center justify-center space-y-3 bg-slate-950/20 border border-white/5 rounded-2xl relative overflow-hidden min-h-[140px]">
+              {hasCameraAccess ? (
+                <video
+                  ref={(el) => {
+                    if (el && streamRef.current) {
+                      el.srcObject = streamRef.current;
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <img src="/ppg_finger_scan.png" className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" />
+              )}
               <div className="absolute inset-0 bg-cyan-600/35 mix-blend-overlay" />
-              <RefreshCw className="animate-spin text-cyan-400" size={24} />
-              <span className="text-white text-xs font-bold animate-pulse">Measuring SpO2... {scanProgress}%</span>
+              <div className="z-10 flex flex-col items-center space-y-1.5 bg-slate-950/75 p-3 rounded-2xl border border-white/10 backdrop-blur-sm text-center">
+                <RefreshCw className="animate-spin text-cyan-400" size={20} />
+                <span className="text-white text-xs font-bold animate-pulse">Measuring SpO2... {scanProgress}%</span>
+                <span className="text-cyan-400 text-[9px] font-bold leading-tight">⚠️ Turn on mobile flash & place finger over camera & flash</span>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">

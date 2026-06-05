@@ -236,9 +236,9 @@ export default function FloatingChatbot() {
             {/* Loading / Typing indicator bubble */}
             {loading && (
               <div className="flex items-center gap-1 bg-white/5 border border-white/5 px-4 py-3 rounded-2xl rounded-tl-none max-w-[70px] chatbot-bubble-bot">
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -290,7 +290,7 @@ export default function FloatingChatbot() {
             <input
               type="text"
               placeholder="Ask a medical question..."
-              className="input text-xs py-2 flex-1 chatbot-input"
+              className="text-xs py-2 flex-1 chatbot-input"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => {

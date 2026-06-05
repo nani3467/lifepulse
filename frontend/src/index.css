@@ -498,6 +498,53 @@ body {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
+/* Base Dark Mode Chatbot Elements */
+.chatbot-bubble-bot {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  color: #e2e8f0 !important;
+}
+
+.chatbot-bubble-user {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
+
+.chatbot-chip {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #cbd5e1 !important;
+  transition: all 0.2s ease-in-out;
+}
+
+.chatbot-chip:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.chatbot-input {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+  border-radius: 0.75rem !important;
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
+  transition: all 0.2s ease-in-out !important;
+}
+
+.chatbot-input:focus {
+  outline: none !important;
+  border-color: rgba(59, 130, 246, 0.6) !important;
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+}
+
+.chatbot-input::placeholder {
+  color: #64748b !important; /* slate-500 */
+}
+
+/* Light Mode Theme Overrides */
 .light .chatbot-panel {
   background-color: rgba(255, 255, 255, 0.98) !important;
   border-color: rgba(0, 0, 0, 0.08) !important;
@@ -548,3 +595,8 @@ body {
   border-color: rgba(0, 0, 0, 0.06) !important;
   color: #111827 !important;
 }
+
+.light .chatbot-input::placeholder {
+  color: #94a3b8 !important; /* slate-400 */
+}
+
