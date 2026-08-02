@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, Link } from 'react-router-dom'
 import {
   Calendar, Clock, User, Stethoscope, Video, MapPin, DollarSign,
   AlertCircle, CheckCircle, RefreshCw, X, CreditCard, Star, CheckSquare
@@ -701,12 +701,12 @@ export default function PatientAppointments() {
                   </div>
 
                   {a.consultation_type === 'video' && a.status === 'confirmed' && a.meeting_link && (
-                    <a
-                      href={a.meeting_link} target="_blank" rel="noreferrer"
+                    <Link
+                      to="/patient/video"
                       className="w-full btn btn-primary py-2 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5"
                     >
-                      <Video size={12} /> Connect consultation Call
-                    </a>
+                      <Video size={12} /> Enter Telehealth Room
+                    </Link>
                   )}
                 </div>
               ))

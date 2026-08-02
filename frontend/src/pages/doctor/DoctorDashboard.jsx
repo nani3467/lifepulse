@@ -105,6 +105,169 @@ export default function DoctorDashboard({ initialTab = 'home' }) {
   const [consultSafetyWarnings, setConsultSafetyWarnings] = useState([])
   const [consultCheckingSafety, setConsultCheckingSafety] = useState(false)
 
+  // WebRTC custom calling states & refs
+  const localVideoRef = useRef(null)
+  const remoteVideoRef = useRef(null)
+  const peerConnectionRef = useRef(null)
+  const localStreamRef = useRef(null)
+  const pollingIntervalRef = useRef(null)
+  const lastSignalIdRef = useRef(0)
+
+  const [remoteStreamReceived, setRemoteStreamReceived] = useState(false)
+  const [webrtcStatus, setWebrtcStatus] = useState('Initializing call tunnel...')
+  const [audioMute, setAudioMute] = useState(false)
+  const [videoMute, setVideoMute] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      cleanupWebRTC()
+    }
+  }, [])
+
+  const cleanupWebRTC = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current)
+      pollingIntervalRef.current = null
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop())
+      localStreamRef.current = null
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
+    lastSignalIdRef.current = 0
+    setRemoteStreamReceived(false)
+    setWebrtcStatus('Initializing call tunnel...')
+    setAudioMute(false)
+    setVideoMute(false)
+  }
+
+  const initiateWebRTC = async (appt) => {
+    cleanupWebRTC()
+    setWebrtcStatus('Acquiring camera and microphone...')
+    
+    try {
+      await api.post('/video/signal/clear', { appointment_id: appt.id })
+    } catch (e) {
+      console.error(e)
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      localStreamRef.current = stream
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream
+      }
+      setupPeerConnection(stream, appt)
+    } catch (err) {
+      console.error("Camera access failed:", err)
+      toast.error("Failed to access camera/microphone. Setting up receive-only call.")
+      setupPeerConnection(null, appt)
+    }
+  }
+
+  const setupPeerConnection = async (stream, appt) => {
+    setWebrtcStatus('Setting up peer connection...')
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    })
+    peerConnectionRef.current = pc
+
+    if (stream) {
+      stream.getTracks().forEach(track => pc.addTrack(track, stream))
+    }
+
+    pc.ontrack = (event) => {
+      console.log("Doctor: Remote track received")
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0]
+        setRemoteStreamReceived(true)
+      }
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal(appt.id, 'candidate', event.candidate)
+      }
+    }
+
+    try {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await sendSignal(appt.id, 'offer', pc.localDescription)
+      setWebrtcStatus('Calling patient...')
+    } catch (e) {
+      console.error("Error creating offer:", e)
+    }
+
+    startPollingSignaling(appt)
+  }
+
+  const sendSignal = async (apptId, type, payload) => {
+    try {
+      await api.post('/video/signal/send', {
+        appointment_id: apptId,
+        sender_role: 'doctor',
+        signal_type: type,
+        data: JSON.stringify(payload)
+      })
+    } catch (err) {
+      console.error("Error sending signal:", err)
+    }
+  }
+
+  const startPollingSignaling = (appt) => {
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/video/signal/get/${appt.id}?last_id=${lastSignalIdRef.current}`)
+        const newSignals = data.signals || []
+
+        for (const signal of newSignals) {
+          lastSignalIdRef.current = Math.max(lastSignalIdRef.current, signal.id)
+
+          if (signal.sender_role === 'patient') {
+            const pc = peerConnectionRef.current
+            if (!pc) continue
+
+            if (signal.signal_type === 'answer') {
+              const answer = new RTCSessionDescription(JSON.parse(signal.data))
+              await pc.setRemoteDescription(answer)
+              setWebrtcStatus('Connecting WebRTC streams...')
+            } else if (signal.signal_type === 'candidate') {
+              const candidate = new RTCIceCandidate(JSON.parse(signal.data))
+              await pc.addIceCandidate(candidate)
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error polling signaling:", err)
+      }
+    }, 1000)
+  }
+
+  const toggleAudio = () => {
+    const newState = !audioMute
+    setAudioMute(newState)
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !newState)
+    }
+    toast.success(newState ? 'Microphone muted' : 'Microphone unmuted')
+  }
+
+  const toggleVideo = () => {
+    const newState = !videoMute
+    setVideoMute(newState)
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !newState)
+    }
+    toast.success(newState ? 'Camera turned off' : 'Camera turned on')
+  }
+
   useEffect(() => {
     loadWorkstationData()
   }, [])
@@ -600,6 +763,7 @@ export default function DoctorDashboard({ initialTab = 'home' }) {
     }
     setActiveTab('video')
     toast.success(`Live consult room started for ${appt.patient_name}`)
+    initiateWebRTC(appt)
   }
 
   // Send a chat message during video consult
@@ -630,6 +794,7 @@ export default function DoctorDashboard({ initialTab = 'home' }) {
         notes: `Diagnosis: ${consultDiagnosis} | Notes: ${consultNotes}`
       })
       toast.success('Clinical consult successfully completed & logged in patient EMR.')
+      cleanupWebRTC()
       loadWorkstationData()
       setActiveTab('home')
       setActiveVideoAppt(null)
@@ -1076,7 +1241,7 @@ export default function DoctorDashboard({ initialTab = 'home' }) {
                       <span className="text-[10px] text-slate-500">ID: LP-PT-{activeVideoAppt.patient_id} | Scheduled: {activeVideoAppt.appointment_time}</span>
                     </div>
                     <button
-                      onClick={() => { setActiveVideoAppt(null); setActiveTab('home'); }}
+                      onClick={() => { cleanupWebRTC(); setActiveVideoAppt(null); setActiveTab('home'); }}
                       className="text-xs text-rose-500 font-bold uppercase border border-rose-500/20 bg-rose-500/5 px-3 py-1.5 rounded-lg hover:bg-rose-500/10 transition-colors"
                     >
                       Exit Consult Room
@@ -1164,42 +1329,65 @@ export default function DoctorDashboard({ initialTab = 'home' }) {
 
                     {/* Center Column: Video feeds & notes (col-span-6) */}
                     <div className="lg:col-span-6 space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* Patient Stream */}
-                        <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950 border border-white/5 flex items-center justify-center">
-                          <div className="text-center space-y-2">
-                            <div className="w-16 h-16 rounded-full bg-blue-600/10 text-blue-400 mx-auto flex items-center justify-center border border-blue-500/20">
-                              <User size={28} />
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-bold block">{activeVideoAppt.patient_name} (Patient feed)</span>
-                          </div>
-                          
-                          {/* Live heart rate indicator overlay */}
-                          <div className="absolute bottom-3 left-3 bg-slate-900/80 border border-white/10 px-2 py-1 rounded-lg text-[9px] font-black text-rose-400 flex items-center gap-1 select-none animate-pulse">
-                            <Heart size={10} className="fill-rose-500 text-rose-500" />
-                            HR: 76 bpm
-                          </div>
-                          
-                          <div className="absolute top-3 right-3 bg-red-600 px-2 py-0.5 rounded text-[8px] font-bold text-white uppercase tracking-wider">
-                            LIVE FEED
-                          </div>
+                      {/* Custom P2P WebRTC Video Consultation Frame */}
+                      <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-slate-900 border border-white/5 flex items-center justify-center shadow-inner" style={{ minHeight: '320px' }}>
+                        {/* Remote Stream (Patient) */}
+                        <video
+                          ref={remoteVideoRef}
+                          autoPlay
+                          playsInline
+                          className="w-full h-full object-cover"
+                        />
+
+                        {/* Local Stream (Doctor, overlay PiP) */}
+                        <div className="absolute bottom-3 right-3 w-28 aspect-video rounded-xl overflow-hidden border border-white/10 bg-slate-950 shadow-2xl z-10">
+                          <video
+                            ref={localVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full h-full object-cover"
+                            style={{ transform: 'scaleX(-1)' }}
+                          />
                         </div>
 
-                        {/* Doctor Stream */}
-                        <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-950 border border-white/5 flex items-center justify-center">
-                          <div className="text-center space-y-2">
-                            <div className="w-16 h-16 rounded-full bg-emerald-600/10 text-emerald-400 mx-auto flex items-center justify-center border border-emerald-500/20">
-                              <Shield size={28} />
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-bold block">Dr. {user?.name} (Your Camera)</span>
+                        {/* Status Overlay */}
+                        {!remoteStreamReceived && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 gap-2.5 z-0">
+                            <RefreshCw className="animate-spin text-blue-500" size={24} />
+                            <span className="text-[10px] text-slate-400 font-medium tracking-wider">
+                              {webrtcStatus}
+                            </span>
                           </div>
-                          <div className="absolute bottom-3 left-3 bg-slate-900/80 border border-white/10 px-2 py-1 rounded-lg text-[9px] text-slate-400">
-                            Microphone Active
-                          </div>
-                          <div className="absolute top-3 right-3 bg-blue-600 px-2 py-0.5 rounded text-[8px] font-bold text-white tracking-wider flex items-center gap-1">
-                            <Clock size={10} />
-                            {formatDuration(callDuration)}
-                          </div>
+                        )}
+                        
+                        {/* Doctor Local Controls Overlay (Bottom Center of Video Box) */}
+                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2.5 bg-black/40 border border-white/5 backdrop-blur-md py-1.5 px-3.5 rounded-full z-20">
+                          <button
+                            type="button"
+                            onClick={toggleAudio}
+                            className={`p-1.5 rounded-lg border transition-all ${
+                              audioMute 
+                                ? 'bg-rose-600/20 text-rose-400 border-rose-500/30' 
+                                : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
+                            }`}
+                            title={audioMute ? "Unmute Microphone" : "Mute Microphone"}
+                          >
+                            {audioMute ? <MicOff size={11} /> : <Mic size={11} />}
+                          </button>
+                          
+                          <button
+                            type="button"
+                            onClick={toggleVideo}
+                            className={`p-1.5 rounded-lg border transition-all ${
+                              videoMute 
+                                ? 'bg-rose-600/20 text-rose-400 border-rose-500/30' 
+                                : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
+                            }`}
+                            title={videoMute ? "Turn Camera On" : "Turn Camera Off"}
+                          >
+                            {videoMute ? <VideoOff size={11} /> : <Video size={11} />}
+                          </button>
                         </div>
                       </div>
 

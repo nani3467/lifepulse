@@ -91,3 +91,65 @@ def end_meeting():
         'message': 'Video call consultation successfully ended.',
         'appointment': appt.to_dict()
     }), 200
+
+
+# In-memory WebRTC signaling store
+signals_store = {}
+signals_counter = {}
+
+@video_bp.route('/signal/send', methods=['POST'])
+@jwt_required()
+def send_signal():
+    data = request.get_json() or {}
+    appt_id = data.get('appointment_id')
+    sender_role = data.get('sender_role')
+    signal_type = data.get('signal_type')
+    signal_data = data.get('data')
+
+    if not appt_id or not sender_role or not signal_type or signal_data is None:
+        return jsonify({'error': 'Missing required fields'}), 422
+
+    appt_id = int(appt_id)
+    if appt_id not in signals_store:
+        signals_store[appt_id] = []
+        signals_counter[appt_id] = 0
+
+    signals_counter[appt_id] += 1
+    new_signal = {
+        'id': signals_counter[appt_id],
+        'sender_role': sender_role,
+        'signal_type': signal_type,
+        'data': signal_data,
+        'timestamp': datetime.datetime.utcnow().isoformat()
+    }
+    signals_store[appt_id].append(new_signal)
+
+    return jsonify({'success': True, 'signal': new_signal}), 201
+
+
+@video_bp.route('/signal/get/<int:appointment_id>', methods=['GET'])
+@jwt_required()
+def get_signals(appointment_id):
+    last_id = request.args.get('last_id', 0, type=int)
+    
+    appt_signals = signals_store.get(appointment_id, [])
+    new_signals = [s for s in appt_signals if s['id'] > last_id]
+
+    return jsonify({'signals': new_signals}), 200
+
+
+@video_bp.route('/signal/clear', methods=['POST'])
+@jwt_required()
+def clear_signals():
+    data = request.get_json() or {}
+    appt_id = data.get('appointment_id')
+    if not appt_id:
+        return jsonify({'error': 'appointment_id is required'}), 422
+
+    appt_id = int(appt_id)
+    if appt_id in signals_store:
+        signals_store[appt_id] = []
+        signals_counter[appt_id] = 0
+
+    return jsonify({'message': 'Signals successfully cleared'}), 200
+

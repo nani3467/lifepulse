@@ -30,9 +30,156 @@ export default function PatientVideoConsult() {
   const [activePrescription, setActivePrescription] = useState(null)
   const [prescriptionsHistory, setPrescriptionsHistory] = useState([])
 
+  // WebRTC custom calling states & refs
+  const localVideoRef = useRef(null)
+  const remoteVideoRef = useRef(null)
+  const peerConnectionRef = useRef(null)
+  const localStreamRef = useRef(null)
+  const pollingIntervalRef = useRef(null)
+  const lastSignalIdRef = useRef(0)
+
+  const [remoteStreamReceived, setRemoteStreamReceived] = useState(false)
+  const [webrtcStatus, setWebrtcStatus] = useState('Waiting for doctor to connect...')
+
   useEffect(() => {
     loadInitialData()
+    return () => {
+      cleanupWebRTC()
+    }
   }, [])
+
+  const cleanupWebRTC = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current)
+      pollingIntervalRef.current = null
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop())
+      localStreamRef.current = null
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
+    lastSignalIdRef.current = 0
+    setRemoteStreamReceived(false)
+    setWebrtcStatus('Waiting for doctor to connect...')
+  }
+
+  const initiateWebRTC = async () => {
+    cleanupWebRTC()
+    setWebrtcStatus('Acquiring camera and microphone...')
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      localStreamRef.current = stream
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream
+      }
+      setupPeerConnection(stream)
+    } catch (err) {
+      console.error("Camera access failed:", err)
+      toast.error("Failed to access camera/microphone. Setting up receive-only call.")
+      setupPeerConnection(null)
+    }
+  }
+
+  const setupPeerConnection = (stream) => {
+    setWebrtcStatus('Connecting to peer...')
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    })
+    peerConnectionRef.current = pc
+
+    if (stream) {
+      stream.getTracks().forEach(track => pc.addTrack(track, stream))
+    }
+
+    pc.ontrack = (event) => {
+      console.log("Remote track received")
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0]
+        setRemoteStreamReceived(true)
+      }
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal('candidate', event.candidate)
+      }
+    }
+
+    startPollingSignaling()
+  }
+
+  const sendSignal = async (type, payload) => {
+    if (!selectedAppt) return
+    try {
+      await api.post('/video/signal/send', {
+        appointment_id: selectedAppt.id,
+        sender_role: 'patient',
+        signal_type: type,
+        data: JSON.stringify(payload)
+      })
+    } catch (err) {
+      console.error("Error sending signal:", err)
+    }
+  }
+
+  const startPollingSignaling = () => {
+    if (!selectedAppt) return
+    
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/video/signal/get/${selectedAppt.id}?last_id=${lastSignalIdRef.current}`)
+        const newSignals = data.signals || []
+
+        for (const signal of newSignals) {
+          lastSignalIdRef.current = Math.max(lastSignalIdRef.current, signal.id)
+
+          if (signal.sender_role === 'doctor') {
+            const pc = peerConnectionRef.current
+            if (!pc) continue
+
+            if (signal.signal_type === 'offer') {
+              const offer = new RTCSessionDescription(JSON.parse(signal.data))
+              await pc.setRemoteDescription(offer)
+              const answer = await pc.createAnswer()
+              await pc.setLocalDescription(answer)
+              await sendSignal('answer', pc.localDescription)
+              setWebrtcStatus('Connecting WebRTC streams...')
+            } else if (signal.signal_type === 'candidate') {
+              const candidate = new RTCIceCandidate(JSON.parse(signal.data))
+              await pc.addIceCandidate(candidate)
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error polling signaling:", err)
+      }
+    }, 1000)
+  }
+
+  const toggleAudio = () => {
+    const newState = !audioMute
+    setAudioMute(newState)
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => track.enabled = !newState)
+    }
+    toast.success(newState ? 'Microphone muted' : 'Microphone unmuted')
+  }
+
+  const toggleVideo = () => {
+    const newState = !videoMute
+    setVideoMute(newState)
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(track => track.enabled = !newState)
+    }
+    toast.success(newState ? 'Camera turned off' : 'Camera turned on')
+  }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -142,6 +289,7 @@ export default function PatientVideoConsult() {
       { sender: 'doctor', text: `Hello ${patient?.full_name || 'Patient'}! I am review your symptom records now. How can I help you today?`, time: format(new Date(), 'hh:mm a') }
     ])
     toast.success('Secure consultation stream successfully loaded!')
+    initiateWebRTC()
   }
 
   const handleSendMessage = (e) => {
@@ -363,80 +511,84 @@ export default function PatientVideoConsult() {
           </div>
 
           {/* CENTER PANEL: Stream Display */}
-          <div className="lg:col-span-2 glass-card bg-slate-950 overflow-hidden relative flex flex-col justify-between p-4 h-full">
-            {/* Header overlay */}
-            <div className="absolute top-4 left-4 z-10 p-2 rounded-xl bg-black/60 backdrop-blur-md text-[10px] text-white flex items-center gap-1.5 border border-white/5">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-              Doctor Room: <strong className="text-blue-400">{selectedAppt?.doctor_name}</strong>
-            </div>
-
-            <div className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-black/60 backdrop-blur-md text-[10px] text-white font-mono border border-white/5">
-              Duration: {formatCallTime(duration)}
-            </div>
-
-            {/* Doctor Feed Mock Screen */}
-            <div className="flex-1 flex items-center justify-center relative">
-              <div className="text-center space-y-3 z-10 bg-slate-900/60 p-6 rounded-2xl border border-white/5 backdrop-blur-md">
-                <div className="w-16 h-16 rounded-full bg-blue-600/20 text-blue-400 mx-auto flex items-center justify-center animate-bounce">
-                  <User size={32} />
-                </div>
-                <h4 className="text-sm font-bold text-white">{selectedAppt?.doctor_name}</h4>
-                <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">WebRTC Tunnel Secure • Online</p>
+          <div className="lg:col-span-2 glass-card bg-slate-950 overflow-hidden relative flex flex-col justify-between p-2 h-full">
+            
+            {/* Custom P2P WebRTC Video Call Container */}
+            <div className="flex-1 w-full h-full relative overflow-hidden rounded-2xl bg-slate-900 flex items-center justify-center" style={{ minHeight: '380px' }}>
+              {/* Remote Video (fill screen) */}
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover rounded-2xl"
+              />
+              
+              {/* Local Video (PiP overlay in bottom-right corner) */}
+              <div className="absolute bottom-4 right-4 w-32 aspect-video rounded-xl overflow-hidden border border-white/10 bg-slate-950 shadow-2xl z-10">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover rounded-xl"
+                  style={{ transform: 'scaleX(-1)' }} // Mirror local view
+                />
               </div>
-            </div>
 
-            {/* Patient PIP feed overlay */}
-            {!videoMute && (
-              <div className="absolute bottom-20 right-4 w-28 h-36 rounded-xl border border-white/10 bg-slate-900 overflow-hidden shadow-2xl flex items-center justify-center">
-                <div className="text-center">
-                  <div className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 mx-auto flex items-center justify-center mb-1">
-                    <User size={14} />
-                  </div>
-                  <span className="text-[8px] text-slate-500 uppercase">You (Live feed)</span>
+              {/* Status overlay when remote stream is not yet active */}
+              {!remoteStreamReceived && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 gap-3 z-0 rounded-2xl">
+                  <RefreshCw className="animate-spin text-blue-500" size={28} />
+                  <span className="text-[11px] text-slate-400 font-medium tracking-wider">
+                    {webrtcStatus}
+                  </span>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Call Control Center Panel */}
-            <div className="h-14 flex items-center justify-center gap-4 bg-black/40 border border-white/5 rounded-2xl px-4 backdrop-blur-md">
+            <div className="mt-2 h-14 flex items-center justify-center gap-4 bg-black/40 border border-white/5 rounded-2xl px-4 backdrop-blur-md">
+              <div className="text-[10px] text-slate-400 font-mono">
+                Duration: {formatCallTime(duration)}
+              </div>
+
+              {/* Audio Mute button */}
               <button
-                onClick={() => setAudioMute(!audioMute)}
+                onClick={toggleAudio}
                 className={`p-2.5 rounded-xl border transition-all ${
-                  audioMute ? 'bg-rose-600/20 border-rose-500/40 text-rose-400' : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
+                  audioMute 
+                    ? 'bg-rose-600/20 text-rose-400 border-rose-500/30' 
+                    : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
                 }`}
-                title={audioMute ? 'Unmute Audio' : 'Mute Audio'}
+                title={audioMute ? "Unmute Microphone" : "Mute Microphone"}
               >
-                {audioMute ? <MicOff size={16} /> : <Mic size={16} />}
+                {audioMute ? <MicOff size={14} /> : <Mic size={14} />}
               </button>
 
+              {/* Video Mute button */}
               <button
-                onClick={() => setVideoMute(!videoMute)}
+                onClick={toggleVideo}
                 className={`p-2.5 rounded-xl border transition-all ${
-                  videoMute ? 'bg-rose-600/20 border-rose-500/40 text-rose-400' : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
+                  videoMute 
+                    ? 'bg-rose-600/20 text-rose-400 border-rose-500/30' 
+                    : 'bg-white/5 border-white/5 text-slate-300 hover:text-white'
                 }`}
-                title={videoMute ? 'Start Camera' : 'Stop Camera'}
+                title={videoMute ? "Turn Camera On" : "Turn Camera Off"}
               >
-                {videoMute ? <VideoOff size={16} /> : <Video size={16} />}
-              </button>
-
-              <button
-                className="p-2.5 rounded-xl bg-white/5 border border-white/5 text-slate-300 hover:text-white transition-colors"
-                title="Share Screen"
-                onClick={() => toast.success('Screen share request triggered')}
-              >
-                <ScreenShare size={16} />
+                {videoMute ? <VideoOff size={14} /> : <Video size={14} />}
               </button>
 
               <button
                 onClick={() => {
+                  cleanupWebRTC()
                   setInCall(false)
                   setActivePrescription(null)
                   toast.error('Telehealth Video consultation terminated')
                 }}
-                className="p-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 transition-colors"
+                className="p-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 transition-colors flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider"
                 title="End Consultation"
               >
-                <PhoneOff size={16} />
+                <PhoneOff size={14} /> End Call
               </button>
             </div>
           </div>

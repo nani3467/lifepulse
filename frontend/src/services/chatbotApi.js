@@ -1,5 +1,5 @@
 import api from './api'
 
 export const chatbotApi = {
-  query: (message) => api.post('/chatbot/query', { message }),
+  query: (message, history = []) => api.post('/chatbot/query', { message, history }),
 }

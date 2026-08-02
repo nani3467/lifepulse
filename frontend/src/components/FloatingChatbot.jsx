@@ -79,6 +79,12 @@ export default function FloatingChatbot() {
     const msgText = textToSend || inputValue
     if (!msgText.trim()) return
 
+    // Map messages state to LLM standard message history payload
+    const historyPayload = messages.map(m => ({
+      role: m.sender === 'user' ? 'user' : 'assistant',
+      content: m.text
+    }))
+
     // Add user message
     const userMsg = { sender: 'user', text: msgText }
     setMessages(prev => [...prev, userMsg])
@@ -86,12 +92,14 @@ export default function FloatingChatbot() {
     setLoading(true)
 
     try {
-      const { data } = await chatbotApi.query(msgText)
+      const { data } = await chatbotApi.query(msgText, historyPayload)
       
       const botMsg = {
         sender: 'bot',
         text: data.reply,
-        action: data.action
+        action: data.action,
+        recommendation: data.recommendation,
+        recommendationRevealed: false
       }
       
       setMessages(prev => [...prev, botMsg])
@@ -102,6 +110,30 @@ export default function FloatingChatbot() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const revealRecommendation = (idx) => {
+    // Hide the button for this message in state
+    setMessages(prev => prev.map((m, i) => i === idx ? { ...m, recommendationRevealed: true } : m))
+
+    const originalMsg = messages[idx]
+    if (!originalMsg || !originalMsg.recommendation) return
+
+    // Append user interaction
+    const userMsg = {
+      sender: 'user',
+      text: "Yes, please recommend a doctor."
+    }
+
+    // Append bot response with recommendation
+    const botMsg = {
+      sender: 'bot',
+      text: originalMsg.recommendation.reply,
+      action: originalMsg.recommendation.action
+    }
+
+    setMessages(prev => [...prev, userMsg, botMsg])
+    speakReply(originalMsg.recommendation.reply)
   }
 
   const toggleListening = () => {
@@ -226,6 +258,17 @@ export default function FloatingChatbot() {
                       className="mt-2.5 w-full py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/30 hover:bg-blue-500/40 text-blue-300 font-bold flex items-center justify-center gap-1 text-[10px] transition-colors"
                     >
                       {msg.action.label}
+                      <ChevronRight size={10} />
+                    </button>
+                  )}
+
+                  {/* Suggest / Recommend doctor prompt */}
+                  {msg.recommendation && !msg.recommendationRevealed && (
+                    <button
+                      onClick={() => revealRecommendation(idx)}
+                      className="mt-2.5 w-full py-1.5 rounded-lg bg-emerald-600/25 border border-emerald-500/30 hover:bg-emerald-500/40 text-emerald-300 font-bold flex items-center justify-center gap-1 text-[10px] transition-colors"
+                    >
+                      Recommend a Doctor?
                       <ChevronRight size={10} />
                     </button>
                   )}
